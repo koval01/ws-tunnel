@@ -2,6 +2,23 @@ export interface Env {
 	TUNNEL_ROOM: DurableObjectNamespace;
 }
 
+// --- 1. Определение DTO и констант безопасности ---
+
+// Максимальный размер входящего сообщения (например, 8 KB)
+const MAX_MESSAGE_SIZE = 8 * 1024;
+// Максимальная длина произвольного payload
+const MAX_PAYLOAD_LENGTH = 4096;
+
+// Допустимые типы сообщений
+export type MessageType = 'system' | 'chat' | 'command' | 'data';
+
+// Строгий интерфейс DTO
+export interface TunnelMessageDTO {
+	type: MessageType;
+	payload: string; // Произвольная информация всегда передается как строка (можно использовать Base64 для бинарников)
+	timestamp: number;
+}
+
 export class TunnelRoom {
 	constructor(private state: DurableObjectState, private env: Env) { }
 
@@ -28,38 +45,95 @@ export class TunnelRoom {
 			await this.state.storage.setAlarm(Date.now() + 3 * 60 * 1000);
 		} else if (sockets.length === 2) {
 			await this.state.storage.deleteAlarm();
-			sockets.forEach((ws) => ws.send(JSON.stringify({ type: 'system', msg: 'Tunnel established! Ready for commands.' })));
+			this.broadcast(server, JSON.stringify(this.createSystemMessage('Tunnel established! Ready for commands.')));
 		}
 
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
 	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-		const sockets = this.state.getWebSockets();
-		for (const socket of sockets) {
-			if (socket !== ws) {
-				socket.send(message);
+		// 1. Защита от больших сообщений (до попытки парсинга)
+		const msgSize = typeof message === 'string' ? message.length : message.byteLength;
+		if (msgSize > MAX_MESSAGE_SIZE) {
+			ws.send(JSON.stringify(this.createSystemMessage('Error: Message too large')));
+			return; // Игнорируем или можно даже закрыть соединение: ws.close(1009, 'Message Too Big');
+		}
+
+		if (message instanceof ArrayBuffer) {
+			ws.send(JSON.stringify(this.createSystemMessage('Error: Binary frames are not supported. Encode as Base64 in payload.')));
+			return;
+		}
+
+		try {
+			const parsed = JSON.parse(message);
+			const validatedDTO = this.validateAndSanitize(parsed);
+
+			if (!validatedDTO) {
+				ws.send(JSON.stringify(this.createSystemMessage('Error: Invalid message format')));
+				return;
 			}
+
+			const safeMessageStr = JSON.stringify(validatedDTO);
+			this.broadcast(ws, safeMessageStr);
+
+		} catch (e) {
+			ws.send(JSON.stringify(this.createSystemMessage('Error: Malformed JSON')));
 		}
 	}
 
 	async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
+		this.broadcast(ws, JSON.stringify(this.createSystemMessage('Peer disconnected.')));
 		const sockets = this.state.getWebSockets();
-		for (const socket of sockets) {
-			socket.send(JSON.stringify({ type: 'system', msg: 'Peer disconnected.' }));
-		}
 		if (sockets.length === 0) {
 			await this.state.storage.deleteAll();
 		}
 	}
 
 	async alarm() {
+		const timeoutMsg = JSON.stringify(this.createSystemMessage('Timeout. Room destroyed.'));
 		const sockets = this.state.getWebSockets();
 		for (const socket of sockets) {
-			socket.send(JSON.stringify({ type: 'system', msg: 'Timeout. Room destroyed.' }));
+			socket.send(timeoutMsg);
 			socket.close(1011, 'Timeout');
 		}
 		await this.state.storage.deleteAll();
+	}
+
+	private broadcast(sender: WebSocket, safeMessage: string) {
+		const sockets = this.state.getWebSockets();
+		for (const socket of sockets) {
+			if (socket !== sender) {
+				socket.send(safeMessage);
+			}
+		}
+	}
+
+	private createSystemMessage(text: string): TunnelMessageDTO {
+		return {
+			type: 'system',
+			payload: text,
+			timestamp: Date.now(),
+		};
+	}
+
+	private validateAndSanitize(data: any): TunnelMessageDTO | null {
+		if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+
+		const allowedTypes: MessageType[] = ['system', 'chat', 'command', 'data'];
+		if (!allowedTypes.includes(data.type)) return null;
+
+		if (typeof data.payload !== 'string') return null;
+
+		let safePayload = data.payload;
+		if (safePayload.length > MAX_PAYLOAD_LENGTH) {
+			safePayload = safePayload.substring(0, MAX_PAYLOAD_LENGTH);
+		}
+
+		return {
+			type: data.type,
+			payload: safePayload,
+			timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now(),
+		};
 	}
 }
 

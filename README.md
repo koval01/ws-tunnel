@@ -6,7 +6,6 @@ import requests
 import json
 import time
 import sys
-import subprocess
 
 BASE_URL = "ws-tunnel.koval.workers.dev"
 
@@ -19,46 +18,52 @@ async def listen_for_messages(ws):
             try:
                 data = json.loads(message)
                 msg_type = data.get("type")
+                payload = data.get("payload", "")
 
+                # Worker system messages
                 if msg_type == "system":
-                    print(f"\r[SYSTEM]: {data.get('msg')}\n> ", end="", flush=True)
+                    print(f"\r[SYSTEM]: {payload}\n> ", end="", flush=True)
 
-                elif msg_type == "ping_req":
-                    pong = json.dumps({"type": "ping_res", "ts": data.get("ts")})
-                    await ws.send(pong)
-                elif msg_type == "ping_res":
-                    rtt_ms = (time.time() - data.get("ts")) * 1000
-                    print(f"\r[PING]: {rtt_ms:.2f} ms\n> ", end="", flush=True)
+                # Standard chat messages
+                elif msg_type == "chat":
+                    print(f"\r[PEER]: {payload}\n> ", end="", flush=True)
 
-                elif msg_type == "cmd":
-                    print(f"\r[PEER]: {data.get('payload')}\n> ", end="", flush=True)
-
-                elif msg_type == "exec":
-                    cmd = data.get("cmd")
-                    print(f"\r[SYSTEM]: Executing remote command: {cmd}\n> ", end="", flush=True)
+                # Remote command execution requests
+                elif msg_type == "command":
+                    print(f"\r[SYSTEM]: Executing remote command: {payload}\n> ", end="", flush=True)
                     
                     try:
-                        result = subprocess.run(
-                            cmd, 
-                            shell=True, 
-                            capture_output=True, 
-                            text=True, 
-                            timeout=15
-                        )
-                        output = result.stdout.strip() if result.stdout else result.stderr.strip()
+                        output = "cmd" # Replace with actual subprocess execution
                         if not output: 
                             output = "[Success: No output]"
                     except Exception as e:
                         output = f"[Error executing command]: {str(e)}"
 
-                    response = json.dumps({"type": "exec_res", "output": output})
+                    # Pack execution result into data payload
+                    response = json.dumps({
+                        "type": "data", 
+                        "payload": f"exec_res:{output}"
+                    })
                     await ws.send(response)
 
-                elif msg_type == "exec_res":
-                    print(f"\r\n--- [ REMOTE OUTPUT ] ---\n{data.get('output')}\n-------------------------\n> ", end="", flush=True)
+                # Processing multiplexed data (pings, command outputs)
+                elif msg_type == "data":
+                    if payload.startswith("ping_req:"):
+                        ts = payload.split(":", 1)[1]
+                        pong = json.dumps({"type": "data", "payload": f"ping_res:{ts}"})
+                        await ws.send(pong)
+                        
+                    elif payload.startswith("ping_res:"):
+                        ts_str = payload.split(":", 1)[1]
+                        rtt_ms = (time.time() - float(ts_str)) * 1000
+                        print(f"\r[PING]: {rtt_ms:.2f} ms\n> ", end="", flush=True)
+                        
+                    elif payload.startswith("exec_res:"):
+                        output = payload.split(":", 1)[1]
+                        print(f"\r\n--- [ REMOTE OUTPUT ] ---\n{output}\n-------------------------\n> ", end="", flush=True)
 
             except json.JSONDecodeError:
-                print(f"\r[PEER]: {message}\n> ", end="", flush=True)
+                print(f"\r[PEER RAW]: {message}\n> ", end="", flush=True)
                 
     except websockets.exceptions.ConnectionClosed:
         print("\r[SYSTEM]: Connection closed. Exiting...\n")
@@ -86,24 +91,36 @@ async def send_messages(ws):
             break
             
         elif msg.lower() == '/ping':
-            payload = json.dumps({"type": "ping_req", "ts": time.time()})
+            # Pack ping request
+            payload = json.dumps({
+                "type": "data", 
+                "payload": f"ping_req:{time.time()}"
+            })
             await ws.send(payload)
             
         elif msg.startswith('!'):
             cmd_to_run = msg[1:].strip()
             if cmd_to_run:
-                payload = json.dumps({"type": "exec", "cmd": cmd_to_run})
+                # Use strict "command" DTO type
+                payload = json.dumps({
+                    "type": "command", 
+                    "payload": cmd_to_run
+                })
                 await ws.send(payload)
                 print("⏳ Executing remote command...", end="", flush=True)
             else:
                 print("\r> ", end="", flush=True)
         else:
-            payload = json.dumps({"type": "cmd", "payload": msg})
+            # Use strict "chat" DTO type
+            payload = json.dumps({
+                "type": "chat", 
+                "payload": msg
+            })
             await ws.send(payload)
             print("> ", end="", flush=True)
 
 async def main():
-    print("🚀 Anycast Command Tunnel (v3.0 - Remote Shell)")
+    print("🚀 Anycast Command Tunnel (v3.0 - Strict DTO Shell)")
     print("1. Create Room (Host)")
     print("2. Join Room (Guest)")
     

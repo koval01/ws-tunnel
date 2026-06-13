@@ -6,7 +6,7 @@
 		"nodejs_compat"
 	],
 	"observability": {
-		"enabled": true
+		"enabled": false
 	},
 	"durable_objects": {
 		"bindings": [
