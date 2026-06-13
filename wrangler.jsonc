@@ -1,0 +1,27 @@
+{
+	"name": "ws-tunnel",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-06-13",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "TUNNEL_ROOM",
+				"class_name": "TunnelRoom"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"TunnelRoom"
+			]
+		}
+	]
+}
