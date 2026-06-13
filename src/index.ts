@@ -2,20 +2,14 @@ export interface Env {
 	TUNNEL_ROOM: DurableObjectNamespace;
 }
 
-// --- 1. Определение DTO и констант безопасности ---
-
-// Максимальный размер входящего сообщения (например, 8 KB)
 const MAX_MESSAGE_SIZE = 8 * 1024;
-// Максимальная длина произвольного payload
 const MAX_PAYLOAD_LENGTH = 4096;
 
-// Допустимые типы сообщений
 export type MessageType = 'system' | 'chat' | 'command' | 'data';
 
-// Строгий интерфейс DTO
 export interface TunnelMessageDTO {
 	type: MessageType;
-	payload: string; // Произвольная информация всегда передается как строка (можно использовать Base64 для бинарников)
+	payload: string;
 	timestamp: number;
 }
 
@@ -52,11 +46,10 @@ export class TunnelRoom {
 	}
 
 	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-		// 1. Защита от больших сообщений (до попытки парсинга)
 		const msgSize = typeof message === 'string' ? message.length : message.byteLength;
 		if (msgSize > MAX_MESSAGE_SIZE) {
 			ws.send(JSON.stringify(this.createSystemMessage('Error: Message too large')));
-			return; // Игнорируем или можно даже закрыть соединение: ws.close(1009, 'Message Too Big');
+			return;
 		}
 
 		if (message instanceof ArrayBuffer) {
